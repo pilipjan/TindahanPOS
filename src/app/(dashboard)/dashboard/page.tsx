@@ -10,6 +10,15 @@ import {
   ArrowUpRight
 } from "lucide-react";
 import { formatPeso } from "@/lib/vat";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer
+} from "recharts";
 
 export default function DashboardOverview() {
   const supabase = createClient();
@@ -19,33 +28,33 @@ export default function DashboardOverview() {
     lowStockItems: 0,
     avgOrderValue: 0
   });
+  const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadStats() {
+    async function loadData() {
       const { data: user } = await supabase.auth.getUser();
       const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
       
       if (!profile) return;
 
-      // Today's date range
+      // KPI Metrics (Today)
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      // Fetch today's transactions
       const { data: txs } = await supabase
         .from("transactions")
         .select("total_amount")
+        .eq("status", "completed")
         .eq("store_id", profile.store_id)
         .gte("created_at", startOfDay.toISOString());
 
-      // Fetch low stock items
       const { data: lowStock } = await supabase
         .from("products")
         .select("id")
         .eq("store_id", profile.store_id)
         .eq("is_active", true)
-        .lt("stock_quantity", 5); // Simplification, normally compare to reorder_point
+        .lt("stock_quantity", 5); 
 
       const totalSales = txs?.reduce((sum, tx) => sum + tx.total_amount, 0) || 0;
       const orderCount = txs?.length || 0;
@@ -57,10 +66,50 @@ export default function DashboardOverview() {
         avgOrderValue: orderCount > 0 ? totalSales / orderCount : 0
       });
 
+      // Chart Data (Last 7 Days)
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+      sevenDaysAgo.setHours(0, 0, 0, 0);
+
+      const { data: weekTxs } = await supabase
+        .from("transactions")
+        .select("total_amount, created_at")
+        .eq("status", "completed")
+        .eq("store_id", profile.store_id)
+        .gte("created_at", sevenDaysAgo.toISOString())
+        .order("created_at", { ascending: true });
+
+      // Group by day for Chart
+      const groupedData: Record<string, number> = {};
+      
+      // Initialize last 7 days with 0
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(sevenDaysAgo);
+        d.setDate(d.getDate() + i);
+        const dayLabel = d.toLocaleDateString("en-PH", { weekday: 'short', month: 'short', day: 'numeric' });
+        groupedData[dayLabel] = 0;
+      }
+
+      if (weekTxs) {
+        weekTxs.forEach(tx => {
+          const d = new Date(tx.created_at);
+          const dayLabel = d.toLocaleDateString("en-PH", { weekday: 'short', month: 'short', day: 'numeric' });
+          if (groupedData[dayLabel] !== undefined) {
+             groupedData[dayLabel] += tx.total_amount;
+          }
+        });
+      }
+
+      const formattedChartData = Object.keys(groupedData).map(key => ({
+        name: key,
+        sales: groupedData[key]
+      }));
+
+      setChartData(formattedChartData);
       setLoading(false);
     }
 
-    loadStats();
+    loadData();
   }, [supabase]);
 
   return (
@@ -89,7 +138,7 @@ export default function DashboardOverview() {
                   {formatPeso(stats.todaySales)}
                 </div>
                 <div className="mt-2 flex items-center text-xs text-emerald-400 font-medium">
-                  <ArrowUpRight className="w-3 h-3 mr-1" /> +12% from yesterday
+                  <ArrowUpRight className="w-3 h-3 mr-1" /> Active Day
                 </div>
               </div>
             </div>
@@ -126,7 +175,7 @@ export default function DashboardOverview() {
 
             <div className="bg-surface-900 border border-surface-800 rounded-2xl p-6 relative overflow-hidden group">
               <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <ShoppingBag className="w-16 h-16 text-primary-400" />
+                <Package className="w-16 h-16 text-primary-400" />
               </div>
               <div className="relative z-10">
                 <h3 className="text-surface-400 font-medium text-sm mb-2">Avg. Order Value</h3>
@@ -140,12 +189,48 @@ export default function DashboardOverview() {
             </div>
           </div>
 
-          {/* Placeholder for charts (Phase 4) */}
-          <div className="bg-surface-900 border border-surface-800 rounded-2xl p-6 h-96 flex flex-col items-center justify-center text-surface-500 text-center gap-4">
-             <TrendingUp className="w-12 h-12 opacity-20" />
-             <div>
-               <h3 className="text-lg font-medium text-surface-300">Sales Analytics Workspace</h3>
-               <p className="text-sm mt-1">Detailed charts and graphs will be activated in Phase 4 of the roadmap.</p>
+          {/* Revenue Chart */}
+          <div className="bg-surface-900 border border-surface-800 rounded-2xl p-6 h-[400px]">
+             <h3 className="text-lg font-bold text-white mb-6">Revenue (Last 7 Days)</h3>
+             <div className="w-full h-[300px]">
+               <ResponsiveContainer width="100%" height="100%">
+                 <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+                   <defs>
+                     <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                       <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                       <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                     </linearGradient>
+                   </defs>
+                   <XAxis 
+                     dataKey="name" 
+                     stroke="#71717A" 
+                     fontSize={12} 
+                     tickLine={false} 
+                     axisLine={false} 
+                   />
+                   <YAxis 
+                     stroke="#71717A" 
+                     fontSize={12} 
+                     tickLine={false} 
+                     axisLine={false} 
+                     tickFormatter={(value) => `₱${value}`} 
+                   />
+                   <CartesianGrid strokeDasharray="3 3" stroke="#27272A" vertical={false} />
+                   <Tooltip 
+                     contentStyle={{ backgroundColor: '#18181B', borderColor: '#27272A', borderRadius: '12px', color: '#fff' }}
+                     itemStyle={{ color: '#34D399', fontWeight: 'bold' }}
+                     formatter={(value: number) => [formatPeso(value), "Sales"]}
+                   />
+                   <Area 
+                     type="monotone" 
+                     dataKey="sales" 
+                     stroke="#10B981" 
+                     strokeWidth={3}
+                     fillOpacity={1} 
+                     fill="url(#colorSales)" 
+                   />
+                 </AreaChart>
+               </ResponsiveContainer>
              </div>
           </div>
         </>

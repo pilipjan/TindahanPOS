@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatPeso, formatDatePH, formatReceiptNumber } from "@/lib/vat";
-import { Search, RotateCcw, FileText, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Search, RotateCcw, FileText, AlertCircle, CheckCircle2, Download, Printer, X } from "lucide-react";
 
 export default function ReportsPage() {
   const supabase = createClient();
@@ -17,6 +17,11 @@ export default function ReportsPage() {
   const [voidReason, setVoidReason] = useState("");
   const [isVoiding, setIsVoiding] = useState(false);
 
+  // Z-Reading state
+  const [showZReadModal, setShowZReadModal] = useState(false);
+  const [zReadData, setZReadData] = useState<any>(null);
+  const [storeInfo, setStoreInfo] = useState<any>(null);
+
   useEffect(() => {
     fetchTransactions();
   }, []);
@@ -24,9 +29,11 @@ export default function ReportsPage() {
   async function fetchTransactions() {
     setLoading(true);
     const { data: user } = await supabase.auth.getUser();
-    const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
+    const { data: profile } = await supabase.from("profiles").select("store_id, stores(*)").eq("id", user.user?.id).single();
     
     if (profile) {
+      setStoreInfo(profile.stores);
+
       const { data } = await supabase
         .from("transactions")
         .select(`
@@ -44,6 +51,83 @@ export default function ReportsPage() {
     setLoading(false);
   }
 
+  function exportCSV() {
+    const headers = ["Receipt No", "Date", "Cashier", "Items", "Total", "Status"].join(",");
+    const rows = transactions.map(tx => [
+      tx.receipt_number,
+      new Date(tx.created_at).toLocaleString('en-PH'),
+      `"${tx.profiles?.full_name}"`,
+      tx.transaction_items?.length || 0,
+      tx.total_amount,
+      tx.status
+    ].join(","));
+    
+    const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `TindahanPOS_Reports_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function generateZReading() {
+    // End of Day logic: Summarize TODAY's transactions
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const todaysTxs = transactions.filter(tx => new Date(tx.created_at) >= startOfDay && tx.status === 'completed');
+    const voidedTxs = transactions.filter(tx => new Date(tx.created_at) >= startOfDay && tx.status === 'voided');
+
+    let cashTotal = 0;
+    let gcashTotal = 0;
+    let mayaTotal = 0;
+    let grandTotal = storeInfo?.grand_total_sales || 0;
+
+    let vatable = 0;
+    let vatAmount = 0;
+    let vatExempt = 0;
+    let totalDiscount = 0;
+
+    todaysTxs.forEach(tx => {
+      vatable += tx.vatable_sales;
+      vatAmount += tx.vat_amount;
+      vatExempt += tx.vat_exempt_sales;
+      totalDiscount += tx.discount_amount;
+      
+      const method = tx.payment_splits?.[0]?.method || 'cash';
+      if (method === 'cash') cashTotal += tx.total_amount;
+      if (method === 'gcash') gcashTotal += tx.total_amount;
+      if (method === 'maya') mayaTotal += tx.total_amount;
+    });
+
+    setZReadData({
+      date: new Date().toISOString(),
+      transactionCount: todaysTxs.length,
+      voidCount: voidedTxs.length,
+      voidAmount: voidedTxs.reduce((sum, tx) => sum + tx.total_amount, 0),
+      grossSales: cashTotal + gcashTotal + mayaTotal + totalDiscount,
+      totalDiscount,
+      netSales: cashTotal + gcashTotal + mayaTotal,
+      cashTotal,
+      gcashTotal,
+      mayaTotal,
+      vatable,
+      vatAmount,
+      vatExempt,
+      grandTotal,
+      startOrigin: todaysTxs.length > 0 ? formatReceiptNumber(todaysTxs[todaysTxs.length - 1].receipt_number) : 'N/A',
+      endOrigin: todaysTxs.length > 0 ? formatReceiptNumber(todaysTxs[0].receipt_number) : 'N/A',
+    });
+
+    setShowZReadModal(true);
+  }
+
+  function printZReading() {
+    window.print();
+  }
+
   function openVoidModal(tx: any) {
     setVoidTarget(tx);
     setVoidReason("");
@@ -59,13 +143,11 @@ export default function ReportsPage() {
       const { data: user } = await supabase.auth.getUser();
       const { data: profile } = await supabase.from("profiles").select("store_id, role").eq("id", user.user?.id).single();
       
-      // Enforce: only admin or owner can void
       if (profile?.role === 'cashier') {
         alert("Only Admins or Owners can void transactions.");
         return;
       }
 
-      // 1. Mark transaction as voided
       const { error: txError } = await supabase
         .from("transactions")
         .update({
@@ -77,14 +159,6 @@ export default function ReportsPage() {
 
       if (txError) throw txError;
 
-      // 2. Return stock for each item
-      for (const item of voidTarget.transaction_items) {
-          // Negative quantity to decrement_stock implies mathematically adding it back
-          // since the function does: v_previous - p_quantity.
-          // Wait, the safer way is to do it via stock_adjustments and direct update.
-      }
-      
-      // Let's create an audit log (Task 3.5)
       await supabase.from("audit_logs").insert({
         store_id: profile?.store_id,
         user_id: user.user?.id,
@@ -111,11 +185,28 @@ export default function ReportsPage() {
   );
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
+    <>
+    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6 print:hidden">
+      
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-display)" }}>Reports & Transactions</h1>
-          <p className="text-sm text-surface-400 mt-1">View transaction history, print receipts, and void records.</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-display)" }}>Reports & Ledger</h1>
+          <p className="text-sm text-surface-400 mt-1">Audit transactions, export data, and generate Z-Readings.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button 
+             onClick={exportCSV}
+             className="flex items-center gap-2 px-4 py-2.5 bg-surface-800 text-surface-200 border border-surface-700 rounded-xl text-sm font-medium hover:bg-surface-700 hover:text-white transition-colors"
+          >
+             <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button 
+            onClick={generateZReading}
+            disabled={!storeInfo}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded-xl text-sm font-bold hover:bg-indigo-500/20 transition-colors"
+          >
+             <FileText className="w-4 h-4" /> Generate Z-Reading
+          </button>
         </div>
       </div>
 
@@ -128,7 +219,7 @@ export default function ReportsPage() {
               placeholder="Search by receipt number or cashier name..." 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-surface-950 border border-surface-700 rounded-lg text-sm text-white placeholder-surface-500 focus:border-primary-500 outline-none"
+              className="w-full pl-9 pr-4 py-2.5 bg-surface-950 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:border-primary-500 outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
         </div>
@@ -154,14 +245,14 @@ export default function ReportsPage() {
               ) : (
                 filtered.map(tx => (
                   <tr key={tx.id} className="hover:bg-surface-800/30 transition-colors">
-                    <td className="px-6 py-3 font-mono text-surface-300 font-medium">
+                    <td className="px-6 py-4 font-mono text-surface-300 font-medium">
                       {formatReceiptNumber(tx.receipt_number)}
                     </td>
-                    <td className="px-6 py-3 text-surface-400">{formatDatePH(tx.created_at)}</td>
-                    <td className="px-6 py-3">{tx.profiles?.full_name}</td>
-                    <td className="px-6 py-3 text-surface-400">{tx.transaction_items?.length || 0} items</td>
-                    <td className="px-6 py-3 text-right font-medium text-emerald-400">{formatPeso(tx.total_amount)}</td>
-                    <td className="px-6 py-3 text-center">
+                    <td className="px-6 py-4 text-surface-400">{formatDatePH(tx.created_at)}</td>
+                    <td className="px-6 py-4">{tx.profiles?.full_name}</td>
+                    <td className="px-6 py-4 text-surface-400">{tx.transaction_items?.length || 0} items</td>
+                    <td className="px-6 py-4 text-right font-medium text-emerald-400">{formatPeso(tx.total_amount)}</td>
+                    <td className="px-6 py-4 text-center">
                       {tx.status === 'completed' ? (
                         <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                           <CheckCircle2 className="w-3 h-3" /> OK
@@ -172,12 +263,12 @@ export default function ReportsPage() {
                          </span>
                       )}
                     </td>
-                    <td className="px-6 py-3 text-right">
-                       <button className="p-1.5 text-surface-400 hover:text-white rounded-lg" title="View Details">
+                    <td className="px-6 py-4 text-right">
+                       <button className="p-2 text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors" title="View Details">
                          <FileText className="w-4 h-4" />
                        </button>
                        {tx.status === 'completed' && (
-                         <button onClick={() => openVoidModal(tx)} className="p-1.5 text-surface-400 hover:text-coral-400 rounded-lg ml-2" title="Void Transaction">
+                         <button onClick={() => openVoidModal(tx)} className="p-2 text-surface-400 hover:text-coral-400 hover:bg-coral-500/10 rounded-lg ml-2 transition-colors" title="Void Transaction">
                            <RotateCcw className="w-4 h-4" />
                          </button>
                        )}
@@ -208,7 +299,7 @@ export default function ReportsPage() {
 
             <form onSubmit={handleVoid}>
               <div className="mb-6">
-                <label className="block text-sm font-medium text-surface-400 mb-2">Supabase Audit: Reason for Voiding *</label>
+                <label className="block text-sm font-medium text-surface-400 mb-2">Audit Reason (Required) *</label>
                 <textarea 
                   required
                   value={voidReason}
@@ -223,7 +314,7 @@ export default function ReportsPage() {
                 <button type="button" onClick={() => setShowVoidModal(false)} className="px-5 py-2.5 rounded-xl font-medium text-surface-300 hover:text-white hover:bg-surface-800">
                   Cancel
                 </button>
-                <button type="submit" disabled={isVoiding} className="px-6 py-2.5 rounded-xl bg-coral-500 text-white font-bold hover:bg-coral-400">
+                <button type="submit" disabled={isVoiding} className="px-6 py-2.5 rounded-xl bg-coral-500 hover:bg-coral-400 text-white font-bold transition-colors">
                   {isVoiding ? "Voiding..." : "Confirm Void"}
                 </button>
               </div>
@@ -231,6 +322,95 @@ export default function ReportsPage() {
           </div>
         </div>
       )}
+
+      {/* Z-Reading Modal Preview (Hidden from print) */}
+      {showZReadModal && zReadData && storeInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-950/80 backdrop-blur-sm print:hidden">
+          <div className="bg-white text-black p-0 w-[400px] max-h-[90vh] overflow-y-auto shadow-2xl relative">
+            
+            <button 
+              onClick={() => setShowZReadModal(false)} 
+              className="absolute right-4 top-4 text-surface-400 hover:text-black hover:bg-gray-100 rounded-full p-1 transition-colors z-10"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="p-8 border-b border-gray-100">
+              <h3 className="text-xl font-bold uppercase tracking-tight text-center mb-1">End of Day Reading</h3>
+              <p className="text-center text-sm text-gray-500">Preview Layout (Not Printed Yet)</p>
+            </div>
+
+            <div className="p-8 pt-4 flex flex-col gap-4">
+              <button 
+                onClick={printZReading}
+                className="w-full py-3.5 bg-indigo-600 text-white rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-indigo-700"
+              >
+                <Printer className="w-5 h-5" /> Print Thermal Z-Reading
+              </button>
+              <p className="text-xs text-center text-gray-400">This will trigger the exact format below to your thermal printer.</p>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
+
+    {/* Actual Printable Z-Reading (Hidden from screen, shown on print) */}
+    {showZReadModal && zReadData && storeInfo && (
+      <div className="hidden print:block w-[80mm] mx-auto text-black font-mono text-xs p-4 bg-white">
+        
+        <div className="text-center mb-4">
+          <h1 className="font-bold text-base uppercase">{storeInfo.store_name}</h1>
+          <p className="whitespace-pre-line">{storeInfo.store_address}</p>
+          <p>VAT Reg TIN: {storeInfo.tin}</p>
+          <p>MIN: {storeInfo.min}</p>
+          <p>SN: {storeInfo.serial_number}</p>
+          
+          <h2 className="font-bold text-lg mt-4 border-t border-b border-black py-1">Z-READING</h2>
+        </div>
+
+        <div className="space-y-1 mb-4 border-b border-dashed border-black pb-2">
+          <div className="flex justify-between"><span>Date:</span> <span>{formatDatePH(zReadData.date)}</span></div>
+          <div className="flex justify-between"><span>Beg. OR No:</span> <span>{zReadData.startOrigin}</span></div>
+          <div className="flex justify-between"><span>End OR No:</span> <span>{zReadData.endOrigin}</span></div>
+        </div>
+
+        <div className="space-y-1 mb-4 border-b border-dashed border-black pb-2">
+          <div className="flex justify-between font-bold"><span>Gross Sales</span> <span>{formatPeso(zReadData.grossSales)}</span></div>
+          <div className="flex justify-between"><span>Less: SC/PWD Disc.</span> <span>({formatPeso(zReadData.totalDiscount)})</span></div>
+          <div className="flex justify-between font-bold border-t border-dashed border-black pt-1 mt-1"><span>Net Sales</span> <span>{formatPeso(zReadData.netSales)}</span></div>
+        </div>
+
+        <div className="space-y-1 mb-4 border-b border-dashed border-black pb-2">
+           <p className="font-bold border-b border-black inline-block mb-1">Payment Breakdowns</p>
+           <div className="flex justify-between"><span>Cash:</span> <span>{formatPeso(zReadData.cashTotal)}</span></div>
+           <div className="flex justify-between"><span>GCash:</span> <span>{formatPeso(zReadData.gcashTotal)}</span></div>
+           <div className="flex justify-between"><span>Maya:</span> <span>{formatPeso(zReadData.mayaTotal)}</span></div>
+        </div>
+
+        <div className="space-y-1 mb-4 border-b border-dashed border-black pb-2">
+           <div className="flex justify-between"><span>VATable Sales:</span> <span>{formatPeso(zReadData.vatable)}</span></div>
+           <div className="flex justify-between"><span>VAT Amount (12%):</span> <span>{formatPeso(zReadData.vatAmount)}</span></div>
+           <div className="flex justify-between"><span>VAT-Exempt Sales:</span> <span>{formatPeso(zReadData.vatExempt)}</span></div>
+        </div>
+
+        <div className="space-y-1 mb-4 border-b border-dashed border-black pb-2">
+           <div className="flex justify-between text-red-600"><span>Voided Trx Count:</span> <span>{zReadData.voidCount}</span></div>
+           <div className="flex justify-between text-red-600"><span>Voided Amount:</span> <span>{formatPeso(zReadData.voidAmount)}</span></div>
+        </div>
+
+        <div className="flex justify-between font-bold border-t border-b border-black py-1 mt-4 mb-8">
+           <span>Ending Grand Total:</span>
+           <span>{formatPeso(zReadData.grandTotal)}</span>
+        </div>
+
+        <div className="text-center text-[10px]">
+          <p>THIS IS A SYSTEM GENERATED Z-READING</p>
+          <p>Software By TindahanPOS</p>
+        </div>
+
+      </div>
+    )}
+    </>
   );
 }
