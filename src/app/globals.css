@@ -246,25 +246,28 @@ body {
 /* ─── Receipt Print Styles ─── */
 @media print {
   body * {
-    visibility: hidden;
+    visibility: hidden !important;
   }
-  .receipt-print,
-  .receipt-print * {
-    visibility: visible;
+  .printable-receipt,
+  .printable-receipt * {
+    visibility: visible !important;
   }
-  .receipt-print {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 80mm;
-    font-family: "Courier New", monospace;
-    font-size: 12px;
-    line-height: 1.4;
-    color: #000;
-    background: #fff;
+  .printable-receipt {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 80mm !important;
+    margin: 0 !important;
+    padding: 10mm !important;
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    color: #000 !important;
+    background: #fff !important;
+    display: block !important;
   }
   @page {
     size: 80mm auto;
-    margin: 2mm;
+    margin: 0;
   }
 }

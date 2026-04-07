@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatPeso, formatDatePH, formatReceiptNumber } from "@/lib/vat";
-import { Search, RotateCcw, FileText, AlertCircle, CheckCircle2, Download, Printer, X } from "lucide-react";
+import { Search, RotateCcw, FileText, AlertCircle, CheckCircle2, Download, Printer, X, Calendar, Package } from "lucide-react";
 
 export default function ReportsPage() {
   const supabase = createClient();
@@ -11,6 +11,13 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   
+  // Date Filters
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  
+  // Store context
+  const [storeId, setStoreId] = useState<string | null>(null);
+
   // Void modal state
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidTarget, setVoidTarget] = useState<any>(null);
@@ -22,73 +29,140 @@ export default function ReportsPage() {
   const [zReadData, setZReadData] = useState<any>(null);
   const [storeInfo, setStoreInfo] = useState<any>(null);
 
+  const fetchTransactions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("store_id, role, stores(*)")
+        .eq("id", user.id)
+        .single();
+      
+      if (profile) {
+        setStoreInfo(profile.stores);
+        setStoreId(profile.store_id);
+
+        let query = supabase
+          .from("transactions")
+          .select(`
+            *,
+            profiles!transactions_cashier_id_fkey(full_name),
+            transaction_items(product_id, product_name, quantity, line_total, unit_price),
+            payment_splits(method)
+          `)
+          .eq("store_id", profile.store_id)
+          .order("created_at", { ascending: false });
+
+        if (startDate) {
+          query = query.gte("created_at", new Date(`${startDate}T00:00:00`).toISOString());
+        }
+        if (endDate) {
+          query = query.lte("created_at", new Date(`${endDate}T23:59:59`).toISOString());
+        }
+        if (!startDate && !endDate) {
+          query = query.limit(300);
+        }
+
+        const { data, error: txError } = await query;
+        if (!txError && data) setTransactions(data);
+      }
+    } catch (err) {
+      console.error("Reports: Unexpected error", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [supabase, startDate, endDate]);
+
   useEffect(() => {
     fetchTransactions();
-  }, []);
-
-  async function fetchTransactions() {
-    setLoading(true);
-    const { data: user } = await supabase.auth.getUser();
-    const { data: profile } = await supabase.from("profiles").select("store_id, stores(*)").eq("id", user.user?.id).single();
-    
-    if (profile) {
-      setStoreInfo(profile.stores);
-
-      const { data } = await supabase
-        .from("transactions")
-        .select(`
-          *,
-          profiles(full_name),
-          transaction_items(product_name, quantity, line_total, unit_price),
-          payment_splits(method)
-        `)
-        .eq("store_id", profile.store_id)
-        .order("created_at", { ascending: false })
-        .limit(100);
-
-      if (data) setTransactions(data);
-    }
-    setLoading(false);
-  }
+  }, [fetchTransactions]);
 
   function exportCSV() {
-    const headers = ["Receipt No", "Date", "Cashier", "Items", "Total", "Status"].join(",");
-    const rows = transactions.map(tx => [
-      tx.receipt_number,
-      new Date(tx.created_at).toLocaleString('en-PH'),
-      `"${tx.profiles?.full_name}"`,
-      tx.transaction_items?.length || 0,
-      tx.total_amount,
-      tx.status
-    ].join(","));
+    const headers = ["Receipt No", "Date", "Cashier", "Subtotal", "VAT Amount", "VAT Exempt", "Discount", "Net Sales", "Total Gross", "Payment Method", "Status"].join(",");
+    const rows = filtered.map(tx => {
+       const method = tx.payment_splits?.[0]?.method || 'Cash';
+       const netSales = tx.total_amount - (tx.vat_amount || 0);
+       return [
+         tx.receipt_number,
+         new Date(tx.created_at).toLocaleString('en-PH'),
+         `"${tx.profiles?.full_name || 'Unknown'}"`,
+         tx.subtotal,
+         tx.vat_amount,
+         tx.vat_exempt_sales,
+         tx.discount_amount,
+         netSales,
+         tx.total_amount,
+         method.toUpperCase(),
+         tx.status
+       ].join(",");
+    });
     
     const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `TindahanPOS_Reports_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `TindahanPOS_Financial_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  async function exportItemizedCSV() {
+    if (!storeId) return;
+    
+    // Fetch live remaining stock for all active products
+    const { data: products } = await supabase.from("products").select("name, stock_quantity").eq("store_id", storeId);
+    const stockMap = new Map();
+    if (products) {
+       products.forEach(p => stockMap.set(p.name, p.stock_quantity));
+    }
+
+    const headers = ["Receipt No", "Date", "Status", "Product Name", "Qty Sold", "Unit Price", "Line Total", "Final Remaining Stock"].join(",");
+    const rows: string[] = [];
+    
+    filtered.forEach(tx => {
+       const date = new Date(tx.created_at).toLocaleString('en-PH');
+       tx.transaction_items?.forEach((item: any) => {
+          const remaining = stockMap.has(item.product_name) ? stockMap.get(item.product_name) : 'N/A';
+          rows.push([
+            tx.receipt_number,
+            date,
+            tx.status,
+            `"${item.product_name}"`,
+            item.quantity,
+            item.unit_price,
+            item.line_total,
+            remaining
+          ].join(","));
+       });
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `TindahanPOS_Item_Sales_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   }
 
   function generateZReading() {
-    // End of Day logic: Summarize TODAY's transactions
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
     const todaysTxs = transactions.filter(tx => new Date(tx.created_at) >= startOfDay && tx.status === 'completed');
     const voidedTxs = transactions.filter(tx => new Date(tx.created_at) >= startOfDay && tx.status === 'voided');
 
-    let cashTotal = 0;
-    let gcashTotal = 0;
-    let mayaTotal = 0;
+    let cashTotal = 0; let gcashTotal = 0; let mayaTotal = 0;
     let grandTotal = storeInfo?.grand_total_sales || 0;
-
-    let vatable = 0;
-    let vatAmount = 0;
-    let vatExempt = 0;
-    let totalDiscount = 0;
+    let vatable = 0; let vatAmount = 0; let vatExempt = 0; let totalDiscount = 0;
 
     todaysTxs.forEach(tx => {
       vatable += tx.vatable_sales;
@@ -110,12 +184,8 @@ export default function ReportsPage() {
       grossSales: cashTotal + gcashTotal + mayaTotal + totalDiscount,
       totalDiscount,
       netSales: cashTotal + gcashTotal + mayaTotal,
-      cashTotal,
-      gcashTotal,
-      mayaTotal,
-      vatable,
-      vatAmount,
-      vatExempt,
+      cashTotal, gcashTotal, mayaTotal,
+      vatable, vatAmount, vatExempt,
       grandTotal,
       startOrigin: todaysTxs.length > 0 ? formatReceiptNumber(todaysTxs[todaysTxs.length - 1].receipt_number) : 'N/A',
       endOrigin: todaysTxs.length > 0 ? formatReceiptNumber(todaysTxs[0].receipt_number) : 'N/A',
@@ -150,11 +220,7 @@ export default function ReportsPage() {
 
       const { error: txError } = await supabase
         .from("transactions")
-        .update({
-          status: 'voided',
-          void_reason: voidReason,
-          voided_by: user.user?.id
-        })
+        .update({ status: 'voided', void_reason: voidReason, voided_by: user.user?.id })
         .eq("id", voidTarget.id);
 
       if (txError) throw txError;
@@ -179,26 +245,38 @@ export default function ReportsPage() {
     }
   }
 
-  const filtered = transactions.filter(tx => 
-    String(tx.receipt_number).includes(searchQuery) || 
-    tx.profiles?.full_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filtered = transactions.filter(tx => {
+    const receiptMatch = String(tx.receipt_number).includes(searchQuery);
+    const nameMatch = tx.profiles?.full_name ? tx.profiles.full_name.toLowerCase().includes(searchQuery.toLowerCase()) : false;
+    return receiptMatch || nameMatch;
+  });
+
+  const totalFilteredSales = filtered
+    .filter(tx => tx.status === 'completed')
+    .reduce((sum, tx) => sum + tx.total_amount, 0);
 
   return (
     <>
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6 print:hidden">
       
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight" style={{ fontFamily: "var(--font-display)" }}>Reports & Ledger</h1>
-          <p className="text-sm text-surface-400 mt-1">Audit transactions, export data, and generate Z-Readings.</p>
+          <p className="text-sm text-surface-400 mt-1">Audit transactions, export financial data, and generate Z-Readings.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button 
+             onClick={exportItemizedCSV}
+             title="Export itemized sales containing remaining stock levels"
+             className="flex items-center gap-2 px-4 py-2.5 bg-surface-800 text-surface-200 border border-surface-700 rounded-xl text-sm font-medium hover:bg-surface-700 hover:text-white transition-colors"
+          >
+             <Package className="w-4 h-4 text-emerald-400" /> Export Item Sales
+          </button>
           <button 
              onClick={exportCSV}
              className="flex items-center gap-2 px-4 py-2.5 bg-surface-800 text-surface-200 border border-surface-700 rounded-xl text-sm font-medium hover:bg-surface-700 hover:text-white transition-colors"
           >
-             <Download className="w-4 h-4" /> Export CSV
+             <Download className="w-4 h-4" /> Financial Export
           </button>
           <button 
             onClick={generateZReading}
@@ -211,17 +289,43 @@ export default function ReportsPage() {
       </div>
 
       <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden shadow-xl">
-        <div className="p-4 border-b border-surface-800 flex items-center justify-between gap-4">
-          <div className="relative flex-1 max-w-md">
+        <div className="p-4 border-b border-surface-800 flex flex-col md:flex-row items-center justify-between gap-4">
+          
+          <div className="relative flex-1 md:max-w-md w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500" />
             <input 
               type="text" 
-              placeholder="Search by receipt number or cashier name..." 
+              placeholder="Search by receipt number or cashier..." 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2.5 bg-surface-950 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:border-primary-500 outline-none focus:ring-1 focus:ring-primary-500"
+              className="w-full pl-9 pr-4 py-2 bg-surface-950 border border-surface-700 rounded-xl text-sm text-white placeholder-surface-500 focus:border-primary-500 outline-none focus:ring-1 focus:ring-primary-500"
             />
           </div>
+
+          <div className="flex items-center gap-3 w-full md:w-auto overflow-x-auto">
+            <div className="flex items-center gap-2 px-3 py-2 bg-surface-950 rounded-lg border border-surface-800 shrink-0">
+               <Calendar className="w-4 h-4 text-surface-500" />
+               <input 
+                 type="date" 
+                 value={startDate}
+                 onChange={e => setStartDate(e.target.value)}
+                 className="bg-transparent text-sm text-surface-300 outline-none"
+               />
+               <span className="text-surface-500">-</span>
+               <input 
+                 type="date" 
+                 value={endDate}
+                 onChange={e => setEndDate(e.target.value)}
+                 className="bg-transparent text-sm text-surface-300 outline-none"
+               />
+            </div>
+            
+            <div className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg shrink-0">
+              <span className="text-xs text-surface-400 uppercase font-bold tracking-wider mr-2">Total Sales</span>
+              <span className="text-sm font-bold text-emerald-400">{formatPeso(totalFilteredSales)}</span>
+            </div>
+          </div>
+
         </div>
 
         <div className="overflow-x-auto">
@@ -232,7 +336,7 @@ export default function ReportsPage() {
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4">Cashier</th>
                 <th className="px-6 py-4">Items</th>
-                <th className="px-6 py-4 text-right">Total</th>
+                <th className="px-6 py-4 text-right">Total Gross</th>
                 <th className="px-6 py-4 text-center">Status</th>
                 <th className="px-6 py-4 text-right">Actions</th>
               </tr>
@@ -241,7 +345,7 @@ export default function ReportsPage() {
               {loading ? (
                 <tr><td colSpan={7} className="px-6 py-12 text-center text-surface-400">Loading...</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-surface-400">No transactions found.</td></tr>
+                <tr><td colSpan={7} className="px-6 py-12 text-center text-surface-400">No transactions found for this selection.</td></tr>
               ) : (
                 filtered.map(tx => (
                   <tr key={tx.id} className="hover:bg-surface-800/30 transition-colors">
@@ -264,9 +368,6 @@ export default function ReportsPage() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
-                       <button className="p-2 text-surface-400 hover:text-white hover:bg-surface-800 rounded-lg transition-colors" title="View Details">
-                         <FileText className="w-4 h-4" />
-                       </button>
                        {tx.status === 'completed' && (
                          <button onClick={() => openVoidModal(tx)} className="p-2 text-surface-400 hover:text-coral-400 hover:bg-coral-500/10 rounded-lg ml-2 transition-colors" title="Void Transaction">
                            <RotateCcw className="w-4 h-4" />
@@ -357,7 +458,7 @@ export default function ReportsPage() {
 
     {/* Actual Printable Z-Reading (Hidden from screen, shown on print) */}
     {showZReadModal && zReadData && storeInfo && (
-      <div className="hidden print:block w-[80mm] mx-auto text-black font-mono text-xs p-4 bg-white">
+      <div className="hidden print:block printable-receipt w-[80mm] mx-auto text-black font-mono text-xs p-4 bg-white">
         
         <div className="text-center mb-4">
           <h1 className="font-bold text-base uppercase">{storeInfo.store_name}</h1>

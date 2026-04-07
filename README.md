@@ -27,10 +27,12 @@ Experience the production environment here:
 ### 📦 Real-time Inventory Management
 *   **Live Stock Updates**: Powered by **Supabase Realtime**, stock levels update instantly across all cashier terminals.
 *   **Low Stock Alerts**: Intelligent visual alerts for reorder points and out-of-stock items.
+*   **Bulk Import**: Instant **Excel/CSV upload** for large product catalogs—stock your store in seconds.
 *   **Audit Trail**: Automated logging for every stock adjustment and transaction.
 
-### 📊 Analytics & Insights
+### 📊 Analytics & Staff Management
 *   **Executive Dashboard**: Real-time sales tracking and daily revenue metrics.
+*   **Staff Directory**: Centralized management for Admins, Owners, and Cashiers with role-based access.
 *   **Top Sellers**: Insights into trending products to optimize stock procurement.
 
 ---
@@ -88,7 +90,7 @@ The app will be available at `http://localhost:3000`.
 ## 🗺 Future Roadmap
 - [ ] **Offline Mode (PWA)**: Allow sales even during internet outages using local storage sync.
 - [ ] **Z-Read Generation**: Automated X and Z-Reading reports for mandatory BIR end-of-day compliance.
-- [ ] **Bulk Import**: Excel/CSV upload for large product catalogs.
+- [ ] **Email Receipts**: Optional digital receipts sent directly to customer emails.
 
 ---
 
