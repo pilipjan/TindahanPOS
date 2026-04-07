@@ -219,7 +219,7 @@ export default function DashboardOverview() {
                    <Tooltip 
                      contentStyle={{ backgroundColor: '#18181B', borderColor: '#27272A', borderRadius: '12px', color: '#fff' }}
                      itemStyle={{ color: '#34D399', fontWeight: 'bold' }}
-                     formatter={(value: number) => [formatPeso(value), "Sales"]}
+                     formatter={(value: any) => [formatPeso(value as number), "Sales"]}
                    />
                    <Area 
                      type="monotone" 

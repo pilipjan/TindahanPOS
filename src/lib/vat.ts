@@ -59,18 +59,18 @@ export function computeSCPWDDiscount(vatInclusiveTotal: number) {
  * Given a list of cart items (each with VAT-inclusive price × qty),
  * compute the full receipt breakdown.
  *
- * discountType: "none" | "senior" | "pwd"
+ * discountType: "none" | "senior" | "pwd" | "promo"
  */
 export function computeCartTotals(
   items: Array<{ unit_price: number; quantity: number }>,
-  discountType: "none" | "senior" | "pwd" = "none"
+  discountType: "none" | "senior" | "pwd" | "promo" = "none"
 ) {
   const rawTotal = items.reduce(
     (sum, item) => sum + roundToTwo(item.unit_price * item.quantity),
     0
   );
 
-  if (discountType === "none") {
+  if (discountType === "none" || discountType === "promo") {
     const vat = computeVAT(rawTotal);
     return {
       subtotal: rawTotal,
