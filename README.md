@@ -10,6 +10,21 @@ TindahanPOS is a modern, cloud-native Point of Sale system tailored specifically
 Experience the production environment here:  
 👉 **[https://tindahan-pos.philipjohnn8nautomation.online](https://tindahan-pos.philipjohnn8nautomation.online)**
 
+## 📸 Visual Preview
+
+<p align="center">
+  <img src="public/screenshots/dashboard.png" width="45%" alt="Dashboard Overview" />
+  <img src="public/screenshots/cashier POS.png" width="45%" alt="Cashier POS Interface" />
+</p>
+<p align="center">
+  <img src="public/screenshots/inventory.png" width="45%" alt="Advanced Inventory Hub" />
+  <img src="public/screenshots/reports.png" width="45%" alt="Sales Reports" />
+</p>
+<p align="center">
+  <img src="public/screenshots/staff.png" width="45%" alt="Staff Management" />
+  <img src="public/screenshots/settings.png" width="45%" alt="System Settings" />
+</p>
+
 ---
 
 ## ✨ Core Features
