@@ -12,8 +12,9 @@ import {
   MoreVertical,
   AlertCircle,
   X,
-  Upload,
-  Download
+  Download,
+  Truck,
+  CalendarClock
 } from "lucide-react";
 import { formatPeso } from "@/lib/vat";
 
@@ -21,11 +22,13 @@ export default function ProductsPage() {
   const supabase = createClient();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [batches, setBatches] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   
   // Modal State
   const [showProductModal, setShowProductModal] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   
   // Form State
@@ -40,6 +43,14 @@ export default function ProductsPage() {
     unit: "pcs",
   });
   
+  const [receiveData, setReceiveData] = useState({
+    product_id: "",
+    quantity: "",
+    cost_price: "",
+    supplier_name: "",
+    expiry_date: ""
+  });
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -52,13 +63,15 @@ export default function ProductsPage() {
     const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
     
     if (profile) {
-      const [productsData, categoriesData] = await Promise.all([
+      const [productsData, categoriesData, batchesData] = await Promise.all([
         supabase.from("products").select("*").eq("store_id", profile.store_id).order("name"),
-        supabase.from("categories").select("*").eq("store_id", profile.store_id).order("name")
+        supabase.from("categories").select("*").eq("store_id", profile.store_id).order("name"),
+        supabase.from("product_batches").select("product_id, expiry_date, quantity").eq("store_id", profile.store_id).gt("quantity", 0)
       ]);
 
       if (productsData.data) setProducts(productsData.data);
       if (categoriesData.data) setCategories(categoriesData.data);
+      if (batchesData.data) setBatches(batchesData.data);
     }
     setLoading(false);
   }
@@ -130,6 +143,48 @@ export default function ProductsPage() {
     }
   }
 
+  async function handleReceiveSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setIsSubmitting(true);
+    
+    try {
+      const { data: user } = await supabase.auth.getUser();
+      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
+      
+      const qty = parseInt(receiveData.quantity, 10);
+      if (!qty || qty <= 0) throw new Error("Invalid quantity");
+
+      // 1. Insert Batch
+      const { error: batchErr } = await supabase.from("product_batches").insert({
+        store_id: profile?.store_id,
+        product_id: receiveData.product_id,
+        quantity: qty,
+        cost_price: receiveData.cost_price ? parseFloat(receiveData.cost_price) : 0,
+        supplier_name: receiveData.supplier_name || null,
+        expiry_date: receiveData.expiry_date || null
+      });
+
+      if (batchErr) throw batchErr;
+
+      // 2. Update Product Stock (using a quick RPC or just select + update)
+      const targetProduct = products.find(p => p.id === receiveData.product_id);
+      if (targetProduct) {
+        const { error: prodErr } = await supabase.from("products")
+          .update({ stock_quantity: targetProduct.stock_quantity + qty })
+          .eq("id", targetProduct.id);
+        if (prodErr) throw prodErr;
+      }
+
+      setShowReceiveModal(false);
+      setReceiveData({ product_id: "", quantity: "", cost_price: "", supplier_name: "", expiry_date: "" });
+      fetchData();
+    } catch (error: any) {
+      alert(`Error receiving stock: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function toggleStatus(product: Product) {
     const { error } = await supabase.from("products").update({ is_active: !product.is_active }).eq("id", product.id);
     if (!error) {
@@ -152,8 +207,11 @@ export default function ProductsPage() {
           <p className="text-sm text-surface-400 mt-1">Manage products, stock levels, and pricing.</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 bg-surface-800 text-surface-200 border border-surface-700 rounded-xl text-sm font-medium hover:bg-surface-700 transition-colors">
-             <Upload className="w-4 h-4" /> Import CSV
+          <button 
+             onClick={() => setShowReceiveModal(true)}
+             className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-xl text-sm font-bold hover:bg-indigo-500/20 transition-colors"
+          >
+             <Truck className="w-4 h-4" /> Receive Stock
           </button>
           <button 
             onClick={openCreateModal}
@@ -240,10 +298,24 @@ export default function ProductsPage() {
                   const isLow = product.stock_quantity > 0 && product.stock_quantity <= product.reorder_point;
                   const isOut = product.stock_quantity <= 0;
                   
+                  // Find soonest expiry
+                  const productBatches = batches.filter(b => b.product_id === product.id && b.expiry_date);
+                  const soonestBatch = productBatches.sort((a, b) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime())[0];
+                  let expiryWarning = false;
+                  let expiryText = "";
+                  if (soonestBatch) {
+                     const daysUntil = Math.ceil((new Date(soonestBatch.expiry_date).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
+                     if (daysUntil <= 0) { expiryWarning = true; expiryText = "Expired!"; }
+                     else if (daysUntil <= 14) { expiryWarning = true; expiryText = `Exp in ${daysUntil}d`; }
+                  }
+                  
                   return (
                     <tr key={product.id} className="hover:bg-surface-800/30 transition-colors">
                       <td className="px-6 py-3">
-                        <div className="font-semibold text-white">{product.name}</div>
+                        <div className="font-semibold text-white flex items-center gap-2">
+                           {product.name}
+                           {expiryWarning && <span className="flex items-center gap-1 text-[10px] bg-coral-500/20 text-coral-300 px-1.5 py-0.5 rounded border border-coral-500/30"><CalendarClock className="w-3 h-3" /> {expiryText}</span>}
+                        </div>
                         <div className="text-xs text-surface-500">{product.unit}</div>
                       </td>
                       <td className="px-6 py-3 font-mono text-surface-300 text-xs">
@@ -364,6 +436,77 @@ export default function ProductsPage() {
                 </button>
                 <button type="submit" disabled={isSubmitting} className="px-6 py-2.5 rounded-xl gradient-primary text-white font-bold shadow-lg hover:shadow-[var(--shadow-glow)] transition-all">
                   {isSubmitting ? "Saving..." : "Save Product"}
+                </button>
+              </div>
+
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Receive Stock Modal ─── */}
+      {showReceiveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-950/80 backdrop-blur-sm">
+          <div className="bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl max-w-md w-full flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center p-6 border-b border-surface-800 bg-indigo-500/5">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400">
+                  <Truck className="w-5 h-5" />
+                </div>
+                <h3 className="text-xl font-bold text-white">Receive Stock</h3>
+              </div>
+              <button onClick={() => setShowReceiveModal(false)} className="text-surface-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleReceiveSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
+              
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Select Product *</label>
+                <select required value={receiveData.product_id} onChange={e => setReceiveData({...receiveData, product_id: e.target.value})}
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-indigo-500">
+                   <option value="">-- Choose --</option>
+                   {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-surface-400 mb-1.5">Qty Received *</label>
+                  <input required type="number" value={receiveData.quantity} onChange={e => setReceiveData({...receiveData, quantity: e.target.value})}
+                    className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-indigo-500" />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-surface-400 mb-1.5">Cost per Unit</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-surface-500 font-medium">₱</span>
+                    <input type="number" step="0.01" value={receiveData.cost_price} onChange={e => setReceiveData({...receiveData, cost_price: e.target.value})}
+                      className="w-full bg-surface-950 border border-surface-700 rounded-xl pl-8 pr-4 py-2.5 text-white outline-none focus:border-indigo-500" />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Expiry Date (For perishables)</label>
+                <input type="date" value={receiveData.expiry_date} onChange={e => setReceiveData({...receiveData, expiry_date: e.target.value})}
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-indigo-500 [color-scheme:dark]" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Supplier Name</label>
+                <input type="text" value={receiveData.supplier_name} onChange={e => setReceiveData({...receiveData, supplier_name: e.target.value})}
+                  placeholder="Optional"
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-indigo-500" />
+              </div>
+
+              <div className="pt-4 border-t border-surface-800 flex justify-end gap-3 mt-6">
+                <button type="button" onClick={() => setShowReceiveModal(false)} className="px-5 py-2.5 rounded-xl font-medium text-surface-300 hover:text-white hover:bg-surface-800 transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" disabled={isSubmitting} className="px-6 py-2.5 rounded-xl bg-indigo-500 text-white font-bold shadow-lg hover:bg-indigo-400 transition-all">
+                  {isSubmitting ? "Saving..." : "Confirm Delivery"}
                 </button>
               </div>
 
