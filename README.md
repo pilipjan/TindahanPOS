@@ -1,4 +1,4 @@
-# 🏪 TindahanPOS by Chicken Kare Studio
+# 🏪 TindahanPOS by Philip John Santiano
 
 > **A high-performance, BIR-ready Cloud POS built for Philippine MSMEs.**
 
