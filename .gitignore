@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# documentation
+AGENTS.md
+CLAUDE.md
+HANDOVER_CONTINUITY.md
+VPS_DEPLOYMENT.md
+
+# build artifacts
+build.tar.gz
+deploy.zip
+dist/
