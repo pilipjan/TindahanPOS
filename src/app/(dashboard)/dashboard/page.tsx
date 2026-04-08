@@ -3,11 +3,12 @@
 import { useEffect, useState, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { 
-  TrendingUp, 
-  Package, 
-  ShoppingBag, 
   AlertTriangle,
-  ArrowUpRight
+  ArrowUpRight,
+  TrendingUp,
+  Package,
+  CalendarClock,
+  ShoppingBag
 } from "lucide-react";
 import { formatPeso } from "@/lib/vat";
 import {
@@ -28,7 +29,8 @@ export default function DashboardOverview() {
     todaySales: 0,
     ordersToday: 0,
     lowStockItems: 0,
-    avgOrderValue: 0
+    avgOrderValue: 0,
+    expiringSoon: 0
   });
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +47,10 @@ export default function DashboardOverview() {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      const [txRes, stockRes] = await Promise.all([
+      const next7Days = new Date();
+      next7Days.setDate(next7Days.getDate() + 7);
+
+      const [txRes, stockRes, expiryRes] = await Promise.all([
         supabase
           .from("transactions")
           .select("total_amount")
@@ -57,7 +62,13 @@ export default function DashboardOverview() {
           .select("id")
           .eq("store_id", profile.store_id)
           .eq("is_active", true)
-          .lt("stock_quantity", 5)
+          .lt("stock_quantity", 5),
+        supabase
+          .from("product_batches")
+          .select("id")
+          .eq("store_id", profile.store_id)
+          .gt("quantity", 0)
+          .lte("expiry_date", next7Days.toISOString())
       ]);
 
       const txs = txRes.data || [];
@@ -68,7 +79,8 @@ export default function DashboardOverview() {
         todaySales: totalSales,
         ordersToday: orderCount,
         lowStockItems: stockRes.data?.length || 0,
-        avgOrderValue: orderCount > 0 ? totalSales / orderCount : 0
+        avgOrderValue: orderCount > 0 ? totalSales / orderCount : 0,
+        expiringSoon: expiryRes.data?.length || 0
       });
       setLoading(false);
     }
@@ -215,6 +227,21 @@ export default function DashboardOverview() {
                 </div>
                 <div className="mt-2 text-xs text-amber-500/70 font-medium">
                   Items below reorder point
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-surface-900 border border-surface-800 rounded-2xl p-6 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <CalendarClock className="w-16 h-16 text-coral-400" />
+              </div>
+              <div className="relative z-10">
+                <h3 className="text-surface-400 font-medium text-sm mb-2">Expiring Soon</h3>
+                <div className={`text-3xl font-extrabold font-sans tracking-tight ${stats.expiringSoon > 0 ? 'text-coral-400' : 'text-white'}`}>
+                  {stats.expiringSoon}
+                </div>
+                <div className="mt-2 text-xs text-surface-500 font-medium italic">
+                  Batches expiring ≤ 7 days
                 </div>
               </div>
             </div>

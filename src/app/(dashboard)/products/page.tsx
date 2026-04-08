@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Product, Category } from "@/types";
 import { 
@@ -12,6 +12,10 @@ import {
   MoreVertical,
   AlertCircle,
   X,
+  History,
+  TrendingUp,
+  Coins,
+  ShieldCheck,
   Download,
   Truck,
   CalendarClock
@@ -29,7 +33,9 @@ export default function ProductsPage() {
   // Modal State
   const [showProductModal, setShowProductModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [showBatchesModal, setShowBatchesModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [selectedProductForBatches, setSelectedProductForBatches] = useState<Product | null>(null);
   
   // Form State
   const [formData, setFormData] = useState({
@@ -41,6 +47,8 @@ export default function ProductsPage() {
     stock_quantity: "",
     reorder_point: "5",
     unit: "pcs",
+    supplier_name: "",
+    expiry_date: ""
   });
   
   const [receiveData, setReceiveData] = useState({
@@ -50,7 +58,14 @@ export default function ProductsPage() {
     supplier_name: "",
     expiry_date: ""
   });
+  const [adjustmentData, setAdjustmentData] = useState({
+    product_id: "",
+    quantity: "",
+    reason: "damaged",
+    notes: ""
+  });
   
+  const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -66,7 +81,7 @@ export default function ProductsPage() {
       const [productsData, categoriesData, batchesData] = await Promise.all([
         supabase.from("products").select("*").eq("store_id", profile.store_id).order("name"),
         supabase.from("categories").select("*").eq("store_id", profile.store_id).order("name"),
-        supabase.from("product_batches").select("product_id, expiry_date, quantity").eq("store_id", profile.store_id).gt("quantity", 0)
+        supabase.from("product_batches").select("product_id, expiry_date, quantity, cost_price, supplier_name, received_date").eq("store_id", profile.store_id).gt("quantity", 0)
       ]);
 
       if (productsData.data) setProducts(productsData.data);
@@ -87,6 +102,8 @@ export default function ProductsPage() {
       stock_quantity: "0",
       reorder_point: "5",
       unit: "pcs",
+      supplier_name: "",
+      expiry_date: ""
     });
     setShowProductModal(true);
   }
@@ -102,6 +119,8 @@ export default function ProductsPage() {
       stock_quantity: product.stock_quantity.toString(),
       reorder_point: product.reorder_point.toString(),
       unit: product.unit || "pcs",
+      supplier_name: product.supplier_name || "",
+      expiry_date: "" // Expiry usually only set on creation or via Receive modal
     });
     setShowProductModal(true);
   }
@@ -124,14 +143,29 @@ export default function ProductsPage() {
         stock_quantity: parseInt(formData.stock_quantity, 10),
         reorder_point: parseInt(formData.reorder_point, 10),
         unit: formData.unit,
+        supplier_name: formData.supplier_name || null,
       };
 
       if (editingProduct) {
         const { error } = await supabase.from("products").update(payload).eq("id", editingProduct.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("products").insert(payload);
-        if (error) throw error;
+        const { data: newProd, error: prodErr } = await supabase.from("products").insert(payload).select().single();
+        if (prodErr) throw prodErr;
+
+        // Create initial batch if stock > 0
+        const qty = parseInt(formData.stock_quantity, 10);
+        if (qty > 0 && newProd) {
+          const { error: batchErr } = await supabase.from("product_batches").insert({
+            store_id: profile?.store_id,
+            product_id: newProd.id,
+            quantity: qty,
+            cost_price: formData.cost_price ? parseFloat(formData.cost_price) : 0,
+            supplier_name: formData.supplier_name || null,
+            expiry_date: formData.expiry_date || null
+          });
+          if (batchErr) throw batchErr;
+        }
       }
 
       setShowProductModal(false);
@@ -185,6 +219,38 @@ export default function ProductsPage() {
     }
   }
 
+  async function handleAdjustSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setIsSubmitting(true);
+    
+    try {
+      const { data: user } = await supabase.auth.getUser();
+      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
+      
+      const qty = parseInt(adjustmentData.quantity, 10);
+      if (!qty || qty === 0) throw new Error("Quantity cannot be zero");
+
+      const { error } = await supabase.rpc('manual_adjust_stock', {
+        p_product_id: adjustmentData.product_id,
+        p_store_id: profile?.store_id,
+        p_quantity_change: -Math.abs(qty),
+        p_reason: adjustmentData.reason,
+        p_adjusted_by: user.user?.id,
+        p_notes: adjustmentData.notes || null
+      });
+
+      if (error) throw error;
+
+      setShowAdjustModal(false);
+      setAdjustmentData({ product_id: "", quantity: "", reason: "damaged", notes: "" });
+      fetchData();
+    } catch (error: any) {
+      alert(`Error adjusting stock: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function toggleStatus(product: Product) {
     const { error } = await supabase.from("products").update({ is_active: !product.is_active }).eq("id", product.id);
     if (!error) {
@@ -196,6 +262,35 @@ export default function ProductsPage() {
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     p.barcode?.includes(searchQuery)
   );
+
+  // Calculate Valuation Summary
+  const valuation = useMemo(() => {
+    let totalCostValue = 0;
+    let totalRevenueValue = 0;
+
+    products.forEach(p => {
+      // Current Potential Revenue (Using live stock qty * selling price)
+      totalRevenueValue += (p.stock_quantity * p.price);
+      
+      // Calculate Cost baseline from batches
+      const productBatches = batches.filter(b => b.product_id === p.id);
+      if (productBatches.length > 0) {
+        productBatches.forEach(b => {
+          totalCostValue += (b.quantity * (b.cost_price || p.price));
+        });
+      } else if (p.stock_quantity > 0) {
+        // Fallback for products with stock but no batch yet (shouldn't happen after mig)
+        totalCostValue += (p.stock_quantity * (p.cost_price || p.price));
+      }
+    });
+
+    return {
+      cost: totalCostValue,
+      revenue: totalRevenueValue,
+      margin: totalRevenueValue - totalCostValue,
+      marginPercent: totalRevenueValue > 0 ? ((totalRevenueValue - totalCostValue) / totalRevenueValue) * 100 : 0
+    };
+  }, [products, batches]);
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
@@ -223,26 +318,37 @@ export default function ProductsPage() {
       </div>
 
       {/* Stats/Alerts Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
-          <div className="text-surface-400 text-sm font-medium mb-1">Total Items</div>
-          <div className="text-3xl font-bold text-white">{products.length}</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5 relative overflow-hidden group">
+          <div className="text-surface-400 text-xs font-bold uppercase tracking-wider mb-1">Item Valuation (Cost)</div>
+          <div className="text-2xl font-black text-white">{formatPeso(valuation.cost)}</div>
+          <Coins className="absolute -bottom-2 -right-2 w-16 h-16 text-primary-500/10 group-hover:text-primary-500/20 transition-colors" />
         </div>
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-amber-400 text-sm font-medium mb-1">
-             <AlertCircle className="w-4 h-4" /> Low Stock Items
-          </div>
-          <div className="text-3xl font-bold text-amber-400">
-             {products.filter(p => p.stock_quantity > 0 && p.stock_quantity <= p.reorder_point).length}
-          </div>
+
+        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5 relative overflow-hidden group">
+          <div className="text-surface-400 text-xs font-bold uppercase tracking-wider mb-1">Potential Revenue</div>
+          <div className="text-2xl font-black text-emerald-400">{formatPeso(valuation.revenue)}</div>
+          <TrendingUp className="absolute -bottom-2 -right-2 w-16 h-16 text-emerald-500/10 group-hover:text-emerald-500/20 transition-colors" />
         </div>
-        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-coral-400 text-sm font-medium mb-1">
-             <AlertCircle className="w-4 h-4" /> Out of Stock
+
+        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5 relative overflow-hidden group">
+          <div className="text-surface-400 text-xs font-bold uppercase tracking-wider mb-1">Estimated Margin</div>
+          <div className="text-2x font-black text-primary-400">
+            {formatPeso(valuation.margin)}
+            <span className="ml-2 text-xs text-surface-500 font-medium">({valuation.marginPercent.toFixed(1)}%)</span>
           </div>
-          <div className="text-3xl font-bold text-coral-400">
-             {products.filter(p => p.stock_quantity <= 0).length}
+          <ShieldCheck className="absolute -bottom-2 -right-2 w-16 h-16 text-primary-500/10 group-hover:text-primary-500/20 transition-colors" />
+        </div>
+
+        <div className="bg-surface-900 border border-surface-800 rounded-2xl p-5 flex items-center justify-between">
+          <div>
+            <div className="text-coral-400 text-xs font-bold uppercase tracking-wider mb-1">Critical Alerts</div>
+            <div className="text-2xl font-black text-white">
+               {products.filter(p => p.stock_quantity <= p.reorder_point).length}
+               <span className="text-xs text-surface-500 ml-2 font-medium">Items Low/Out</span>
+            </div>
           </div>
+          <AlertCircle className="w-8 h-8 text-coral-500/50" />
         </div>
       </div>
 
@@ -346,6 +452,20 @@ export default function ProductsPage() {
                       </td>
                       <td className="px-6 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          <button 
+                            onClick={() => { setSelectedProductForBatches(product); setShowBatchesModal(true); }}
+                            className="p-1.5 text-surface-400 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                            title="View Batches"
+                          >
+                            <History className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => { setAdjustmentData({...adjustmentData, product_id: product.id}); setShowAdjustModal(true); }}
+                            className="p-1.5 text-surface-400 hover:text-coral-400 hover:bg-coral-500/10 rounded-lg transition-colors"
+                            title="Adjust Stock (Waste)"
+                          >
+                            <AlertCircle className="w-4 h-4" />
+                          </button>
                           <button onClick={() => openEditModal(product)} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded-lg transition-colors">
                             <Edit className="w-4 h-4" />
                           </button>
@@ -427,6 +547,23 @@ export default function ProductsPage() {
                   <label className="block text-sm font-medium text-surface-400 mb-1.5">Reorder Point Alert At</label>
                   <input required type="number" value={formData.reorder_point} onChange={e => setFormData({...formData, reorder_point: e.target.value})}
                     className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-primary-500" />
+                </div>
+
+                <div className="col-span-2 pt-2 pb-1 border-b border-surface-800">
+                  <span className="text-xs font-bold text-surface-500 uppercase tracking-widest">Initial Supplier & Expiry (New Items)</span>
+                </div>
+
+                <div className={editingProduct ? "opacity-50 pointer-events-none" : ""}>
+                  <label className="block text-sm font-medium text-surface-400 mb-1.5">Preferred Supplier</label>
+                  <input type="text" value={formData.supplier_name} onChange={e => setFormData({...formData, supplier_name: e.target.value})}
+                    placeholder="Wholesaler name..."
+                    className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-primary-500" />
+                </div>
+
+                <div className={editingProduct ? "opacity-50 pointer-events-none" : ""}>
+                  <label className="block text-sm font-medium text-surface-400 mb-1.5">Initial Expiry Date</label>
+                  <input type="date" value={formData.expiry_date} onChange={e => setFormData({...formData, expiry_date: e.target.value})}
+                    className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-primary-500 [color-scheme:dark]" />
                 </div>
               </div>
 
@@ -510,6 +647,135 @@ export default function ProductsPage() {
                 </button>
               </div>
 
+            </form>
+          </div>
+        </div>
+      )}
+      {/* ─── View Batches Modal ─── */}
+      {showBatchesModal && selectedProductForBatches && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-950/80 backdrop-blur-sm">
+          <div className="bg-surface-900 border border-surface-700 rounded-2xl shadow-2xl max-w-2xl w-full flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center p-6 border-b border-surface-800">
+               <div>
+                 <h3 className="text-xl font-bold text-white">{selectedProductForBatches.name}</h3>
+                 <p className="text-sm text-surface-400">Inventory Batch Breakdown</p>
+               </div>
+               <button onClick={() => setShowBatchesModal(false)} className="text-surface-400 hover:text-white">
+                 <X className="w-5 h-5" />
+               </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-0 scrollbar-thin">
+               <table className="w-full text-left text-sm whitespace-nowrap">
+                  <thead className="bg-surface-950/50 text-surface-400 font-medium sticky top-0">
+                    <tr>
+                      <th className="px-6 py-4">Received On</th>
+                      <th className="px-6 py-4">Supplier</th>
+                      <th className="px-6 py-4">Cost</th>
+                      <th className="px-6 py-4">Remaining</th>
+                      <th className="px-6 py-4">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-800/60">
+                    {batches.filter(b => b.product_id === selectedProductForBatches.id).length === 0 ? (
+                       <tr><td colSpan={5} className="px-6 py-8 text-center text-surface-500">No active batches tracked for this product.</td></tr>
+                    ) : (
+                      batches
+                        .filter(b => b.product_id === selectedProductForBatches.id)
+                        .sort((a, b) => new Date(a.received_date || a.created_at).getTime() - new Date(b.received_date || b.created_at).getTime())
+                        .map((batch, idx) => {
+                          const expiryDate = batch.expiry_date ? new Date(batch.expiry_date) : null;
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          
+                          const isExpired = expiryDate && expiryDate < today;
+                          const isExpiringSoon = expiryDate && !isExpired && (expiryDate.getTime() - today.getTime()) / (1000 * 3600 * 24) <= 3;
+                          
+                          return (
+                            <tr key={idx} className={`hover:bg-surface-800/20 transition-colors ${
+                              isExpired ? 'bg-coral-500/10' : 
+                              isExpiringSoon ? 'bg-amber-500/10' : ''
+                            }`}>
+                               <td className="px-6 py-3 text-surface-300">
+                                  {batch.received_date ? new Date(batch.received_date).toLocaleDateString() : 'Initial Stock'}
+                               </td>
+                               <td className="px-6 py-3">{batch.supplier_name || <span className="text-surface-600 italic">Unknown</span>}</td>
+                               <td className="px-6 py-3 text-surface-400 font-mono">{batch.cost_price ? formatPeso(batch.cost_price) : '-'}</td>
+                               <td className="px-6 py-3 font-bold text-white">{batch.quantity}</td>
+                               <td className="px-6 py-3">
+                                  {batch.expiry_date ? (
+                                     <div className="flex flex-col">
+                                       <span className={`font-bold ${
+                                         isExpired ? 'text-coral-400' : 
+                                         isExpiringSoon ? 'text-amber-400 font-black' : 'text-surface-300'
+                                       }`}>
+                                         Exp: {new Date(batch.expiry_date).toLocaleDateString()}
+                                       </span>
+                                       {isExpired && <span className="text-[10px] text-coral-500 uppercase font-black tracking-tighter">Expired!</span>}
+                                       {isExpiringSoon && <span className="text-[10px] text-amber-500 uppercase font-black tracking-tighter">Expiring Soon</span>}
+                                     </div>
+                                  ) : <span className="text-surface-600">No Expiry</span>}
+                               </td>
+                            </tr>
+                          )
+                        })
+                    )}
+                  </tbody>
+               </table>
+            </div>
+
+            <div className="p-6 border-t border-surface-800 bg-surface-950/20 flex justify-between items-center text-xs text-surface-500 italic">
+               <p>Batches are ordered by FIFO (Oldest first) and prioritized by expiry date.</p>
+               <button onClick={() => setShowBatchesModal(false)} className="px-4 py-2 bg-surface-800 text-white rounded-lg font-medium hover:bg-surface-700 transition-colors">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Adjust Stock Modal (Waste/Personal Use) ─── */}
+      {showAdjustModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-surface-950/80 backdrop-blur-sm">
+          <div className="bg-surface-900 border border-coral-500/50 rounded-2xl shadow-2xl max-w-sm w-full p-6">
+            <div className="flex items-center gap-3 mb-6">
+               <div className="p-2 bg-coral-500/20 rounded-lg text-coral-400">
+                 <AlertCircle className="w-5 h-5" />
+               </div>
+               <h3 className="text-xl font-bold text-white">Stock Adjustment</h3>
+            </div>
+
+            <form onSubmit={handleAdjustSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Qty to Remove *</label>
+                <input required type="number" min="1" value={adjustmentData.quantity} onChange={e => setAdjustmentData({...adjustmentData, quantity: e.target.value})}
+                  placeholder="Items lost/removed"
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-coral-500" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Reason</label>
+                <select value={adjustmentData.reason} onChange={e => setAdjustmentData({...adjustmentData, reason: e.target.value})}
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-coral-500">
+                   <option value="damaged">Damaged / Spoiled</option>
+                   <option value="returned">Customer Return</option>
+                   <option value="correction">Inventory Correction</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-surface-400 mb-1.5">Notes (Optional)</label>
+                <textarea value={adjustmentData.notes} onChange={e => setAdjustmentData({...adjustmentData, notes: e.target.value})}
+                  placeholder="Add additional context..."
+                  className="w-full bg-surface-950 border border-surface-700 rounded-xl px-4 py-2.5 text-white outline-none focus:border-coral-500 min-h-[80px]" />
+              </div>
+
+              <div className="pt-4 border-t border-surface-800 flex justify-end gap-3 mt-4">
+                <button type="button" onClick={() => setShowAdjustModal(false)} className="px-5 py-2.5 rounded-xl font-medium text-surface-300 hover:text-white hover:bg-surface-800">
+                  Cancel
+                </button>
+                <button type="submit" disabled={isSubmitting} className="px-6 py-2.5 rounded-xl bg-coral-500 text-white font-bold shadow-lg hover:bg-coral-400">
+                  {isSubmitting ? "Adjusting..." : "Apply Adjustment"}
+                </button>
+              </div>
             </form>
           </div>
         </div>

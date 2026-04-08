@@ -24,11 +24,14 @@ Experience the production environment here:
 *   **Built-in 12% VAT**: Automated VAT-inclusive pricing logic with clear "Vatable Sales" and "VAT Amount" breakdowns.
 *   **Senior Citizen / PWD Support**: One-click 20% discount application and VAT-exempt calculation (following local laws).
 
-### 📦 Real-time Inventory Management
-*   **Live Stock Updates**: Powered by **Supabase Realtime**, stock levels update instantly across all cashier terminals.
-*   **Low Stock Alerts**: Intelligent visual alerts for reorder points and out-of-stock items.
+### 📦 Professional Inventory Hub
+*   **Advanced Batch Tracking (FIFO)**: Intelligent stock deduction logic that ensures oldest stock (or those expiring soonest) are sold first.
+*   **Perishable Management**: Track **Expiry Dates** for every batch with automated Dashboard alerts for items expiring within 7 days.
+*   **Live Valuation Analytics**: Real-time visibility into **Total Cost Value**, **Potential Revenue**, and **Estimated Margin**—know your "money on the shelves."
+*   **Waste & Spoilage Logging**: Dedicated manual adjustment tool for recording damaged items or personal use, maintaining a perfect audit trail.
+*   **Supplier Directory**: Link every stock delivery to specific suppliers for better procurement tracking.
 *   **Bulk Import**: Instant **Excel/CSV upload** for large product catalogs—stock your store in seconds.
-*   **Audit Trail**: Automated logging for every stock adjustment and transaction.
+*   **Audit Trail**: Automated logging for every stock adjustment and transaction powered by PostgreSQL triggers.
 
 ### 📊 Analytics & Staff Management
 *   **Executive Dashboard**: Real-time sales tracking and daily revenue metrics.

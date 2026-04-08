@@ -60,6 +60,7 @@ export interface Product {
   reorder_point: number;
   unit: string;
   is_active: boolean;
+  supplier_name: string | null;
   image_url: string | null;
   created_at: string;
   updated_at: string;
