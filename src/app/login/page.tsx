@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { motion } from "framer-motion";
-import { Zap, Mail, Lock, ArrowRight, Eye, EyeOff, AlertCircle } from "lucide-react";
+import { Zap, Mail, Lock, ArrowRight, Eye, EyeOff, AlertCircle, UserPlus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginForm() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,9 +15,34 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [inviteStoreName, setInviteStoreName] = useState<string>("");
 
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  useEffect(() => {
+    const token = searchParams.get("invite");
+    if (token) {
+      setInviteToken(token);
+      setIsSignUp(true);
+      // Optionally look up the store name from the invite token
+      supabase
+        .from("store_invites")
+        .select("stores(store_name), role")
+        .eq("token", token)
+        .is("used_by", null)
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            const storeName = (data.stores as any)?.store_name;
+            setInviteStoreName(storeName ? `${storeName} (${data.role})` : "");
+          }
+        });
+    }
+  }, [searchParams]);
+
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,11 +56,14 @@ export default function LoginPage() {
           email,
           password,
           options: {
-            data: { full_name: fullName },
+            data: {
+              full_name: fullName,
+              ...(inviteToken ? { invite_token: inviteToken } : {})
+            },
           },
         });
         if (signUpError) throw signUpError;
-        setMessage("Check your email for a confirmation link!");
+        setMessage("Check your email for a confirmation link! You can then log in and you'll be part of the store.");
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
@@ -151,13 +179,28 @@ export default function LoginPage() {
 
           {/* Card */}
           <div className="bg-surface-900/80 backdrop-blur-xl border border-surface-700/50 rounded-2xl p-8 shadow-2xl">
+
+            {/* Invite Banner */}
+            {inviteToken && (
+              <div className="mb-5 p-3 rounded-xl bg-primary-500/10 border border-primary-500/20 flex items-start gap-2">
+                <UserPlus className="w-4 h-4 text-primary-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-primary-300">You've been invited!</p>
+                  {inviteStoreName && (
+                    <p className="text-xs text-surface-400 mt-0.5">Store: <strong className="text-white">{inviteStoreName}</strong></p>
+                  )}
+                  <p className="text-xs text-surface-500 mt-1">Create your account to join this store as a staff member.</p>
+                </div>
+              </div>
+            )}
+
             <div className="text-center mb-6">
               <h2 className="text-2xl font-bold text-white" style={{ fontFamily: "var(--font-display)" }}>
-                {isSignUp ? "Create Your Account" : "Welcome Back"}
+                {isSignUp ? (inviteToken ? "Join Store" : "Create Your Account") : "Welcome Back"}
               </h2>
               <p className="mt-1 text-sm text-surface-400">
                 {isSignUp
-                  ? "Start managing your store in minutes"
+                  ? (inviteToken ? "Create your account to join the store" : "Start managing your store in minutes")
                   : "Sign in to your TindahanPOS dashboard"}
               </p>
             </div>
@@ -309,5 +352,13 @@ export default function LoginPage() {
         </motion.div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-surface-950 text-surface-400">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Store, Building2, Receipt, Search, Save, AlertCircle } from "lucide-react";
+import { Store, Receipt, Save, AlertCircle, Download, Upload, DatabaseBackup, CheckCircle2, Loader2 } from "lucide-react";
 
 export default function SettingsPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [role, setRole] = useState<string>("cashier");
+
+  // Backup state
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [backupMessage, setBackupMessage] = useState({ type: "", text: "" });
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [storeData, setStoreData] = useState({
     id: "",
@@ -53,7 +59,98 @@ export default function SettingsPage() {
       setLoading(false);
     }
     fetchStore();
-  }, [supabase]);
+  }, []);
+
+  // ── Export backup as JSON ──
+  async function exportBackup() {
+    if (!storeData.id) return;
+    setIsExporting(true);
+    setBackupMessage({ type: "", text: "" });
+    try {
+      const [productsRes, categoriesRes] = await Promise.all([
+        supabase.from("products").select("*").eq("store_id", storeData.id),
+        supabase.from("categories").select("*").eq("store_id", storeData.id),
+      ]);
+
+      const backup = {
+        version: "1.0",
+        exportedAt: new Date().toISOString(),
+        store: storeData,
+        products: productsRes.data || [],
+        categories: categoriesRes.data || [],
+      };
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `TindahanPOS_Backup_${new Date().toISOString().split("T")[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setBackupMessage({ type: "success", text: `Backup exported! ${backup.products.length} products and ${backup.categories.length} categories saved.` });
+    } catch (err: any) {
+      setBackupMessage({ type: "error", text: `Export failed: ${err.message}` });
+    } finally {
+      setIsExporting(false);
+      setTimeout(() => setBackupMessage({ type: "", text: "" }), 6000);
+    }
+  }
+
+  // ── Import / Restore from JSON backup ──
+  async function importBackup(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !storeData.id) return;
+
+    if (!confirm(
+      "Restoring a backup will REPLACE all your current products and categories with those from the backup file.\n\nThis cannot be undone. Continue?"
+    )) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    setIsImporting(true);
+    setBackupMessage({ type: "", text: "" });
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text);
+
+      if (!backup.version || !backup.products || !backup.categories) {
+        throw new Error("Invalid backup file format.");
+      }
+
+      // Delete existing data for this store
+      await supabase.from("products").delete().eq("store_id", storeData.id);
+      await supabase.from("categories").delete().eq("store_id", storeData.id);
+
+      // Re-insert categories first (products depend on them)
+      if (backup.categories.length > 0) {
+        const cats = backup.categories.map((c: any) => ({ ...c, store_id: storeData.id }));
+        const { error: catErr } = await supabase.from("categories").upsert(cats, { onConflict: "id" });
+        if (catErr) throw catErr;
+      }
+
+      // Re-insert products
+      if (backup.products.length > 0) {
+        const prods = backup.products.map((p: any) => ({ ...p, store_id: storeData.id }));
+        const { error: prodErr } = await supabase.from("products").upsert(prods, { onConflict: "id" });
+        if (prodErr) throw prodErr;
+      }
+
+      setBackupMessage({
+        type: "success",
+        text: `Restore complete! Imported ${backup.products.length} products and ${backup.categories.length} categories from backup (${backup.exportedAt?.split("T")[0] || "unknown date"}).`
+      });
+    } catch (err: any) {
+      setBackupMessage({ type: "error", text: `Restore failed: ${err.message}` });
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setTimeout(() => setBackupMessage({ type: "", text: "" }), 8000);
+    }
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -219,6 +316,88 @@ export default function SettingsPage() {
         )}
 
       </form>
+
+      {/* ── Data Management Section ── */}
+      <div className="bg-surface-900 border border-surface-800 rounded-2xl overflow-hidden shadow-lg">
+        <div className="bg-surface-950/50 p-4 border-b border-surface-800 flex items-center gap-3">
+          <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400">
+            <DatabaseBackup className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="font-bold text-white text-lg">Data Management</h2>
+            <p className="text-xs text-surface-500">Export or restore your store inventory and settings.</p>
+          </div>
+        </div>
+        <div className="p-6 space-y-5">
+
+          {/* Backup status message */}
+          {backupMessage.text && (
+            <div className={`flex items-start gap-3 p-4 rounded-xl border text-sm ${
+              backupMessage.type === "error"
+                ? "bg-coral-500/10 text-coral-300 border-coral-500/20"
+                : "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+            }`}>
+              {backupMessage.type === "error"
+                ? <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                : <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />}
+              <span>{backupMessage.text}</span>
+            </div>
+          )}
+
+          {/* Export */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-surface-950/50 border border-surface-800 rounded-xl">
+            <div>
+              <h3 className="font-semibold text-white">Export Backup</h3>
+              <p className="text-xs text-surface-500 mt-0.5">
+                Downloads a JSON file with all your products, categories, and store info.
+              </p>
+            </div>
+            <button
+              onClick={exportBackup}
+              disabled={isExporting || !storeData.id}
+              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-xl text-sm font-bold hover:bg-indigo-500/20 transition-colors disabled:opacity-50 shrink-0"
+            >
+              {isExporting
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting...</>
+                : <><Download className="w-4 h-4" /> Export JSON</>}
+            </button>
+          </div>
+
+          {/* Restore */}
+          {canEdit && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-surface-950/50 border border-amber-500/10 rounded-xl">
+              <div>
+                <h3 className="font-semibold text-white">Restore from Backup</h3>
+                <p className="text-xs text-surface-500 mt-0.5">
+                  Upload a previously exported JSON file. <strong className="text-amber-400">This will replace all current products and categories.</strong>
+                </p>
+              </div>
+              <div className="shrink-0">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  id="backup-file-input"
+                  onChange={importBackup}
+                />
+                <label
+                  htmlFor="backup-file-input"
+                  className={`flex items-center gap-2 px-5 py-2.5 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded-xl text-sm font-bold hover:bg-amber-500/20 transition-colors cursor-pointer ${
+                    isImporting ? "opacity-50 pointer-events-none" : ""
+                  }`}
+                >
+                  {isImporting
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Restoring...</>
+                    : <><Upload className="w-4 h-4" /> Restore JSON</>}
+                </label>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+
     </div>
   );
 }
