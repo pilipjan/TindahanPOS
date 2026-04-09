@@ -29,10 +29,17 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  const isGuest = request.cookies.get("tindahan_guest")?.value === "true";
+
   // Refresh the session — this is important!
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // But wrap in try-catch to prevent crashing on invalid refresh tokens
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch (e) {
+    console.error("Middleware Auth Error:", e);
+  }
 
   // Protected routes — redirect to login if not authenticated
   const protectedPaths = ["/dashboard", "/pos", "/products", "/transactions", "/reports", "/staff", "/settings", "/audit"];
@@ -40,7 +47,7 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith(path)
   );
 
-  if (isProtected && !user) {
+  if (isProtected && !user && !isGuest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

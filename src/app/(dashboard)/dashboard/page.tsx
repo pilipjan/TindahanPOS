@@ -40,8 +40,28 @@ export default function DashboardOverview() {
   // Load KPI Metrics (runs only once)
   useEffect(() => {
     async function loadKPIs() {
-      const { data: user } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
+      // Use try-catch for auth calls
+      let isGuestUser = true;
+      let userId = null;
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          isGuestUser = false;
+          userId = user.id;
+        }
+      } catch (e) {
+        console.error("Auth check failed, assuming guest mode", e);
+      }
+
+      if (isGuestUser) {
+        const { DEMO_STATS } = await import("@/lib/constants/demo-data");
+        setStats(DEMO_STATS);
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", userId).single();
       if (!profile) return;
 
       const startOfDay = new Date();
@@ -90,8 +110,28 @@ export default function DashboardOverview() {
   // Load Chart Data based on selected period
   useEffect(() => {
     async function loadChartData() {
-      const { data: user } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", user.user?.id).single();
+      let isGuestUser = true;
+      let userId = null;
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          isGuestUser = false;
+          userId = user.id;
+        }
+      } catch (e) {
+        console.error("Auth check failed, assuming guest", e);
+      }
+
+      if (isGuestUser) {
+        const { generateDemoChartData } = await import("@/lib/constants/demo-data");
+        const data = generateDemoChartData();
+        setChartData(data);
+        setPeriodTotal(data.reduce((sum, d) => sum + d.sales, 0));
+        return;
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("store_id").eq("id", userId).single();
       if (!profile) return;
 
       const now = new Date();

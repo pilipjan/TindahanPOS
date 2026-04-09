@@ -9,6 +9,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [role, setRole] = useState<string>("cashier");
+  const [isGuest, setIsGuest] = useState(false);
 
   // Backup state
   const [isExporting, setIsExporting] = useState(false);
@@ -34,8 +35,32 @@ export default function SettingsPage() {
 
   useEffect(() => {
     async function fetchStore() {
-      const { data: user } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("*, stores(*)").eq("id", user.user?.id).single();
+      // Check for guest/demo mode first
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        // Guest / Demo mode — load demo store data
+        const { DEMO_STORE } = await import("@/lib/constants/demo-data");
+        setRole("owner"); // Demo shows as owner (read-only via the demo notice)
+        setStoreData({
+          id: DEMO_STORE.id,
+          store_name: DEMO_STORE.store_name || "",
+          store_address: DEMO_STORE.store_address || "",
+          tin: DEMO_STORE.tin || "",
+          vat_registered: DEMO_STORE.vat_registered ?? true,
+          ptu_number: DEMO_STORE.ptu_number || "",
+          ptu_valid_until: DEMO_STORE.ptu_valid_until || "",
+          min: DEMO_STORE.min || "",
+          serial_number: DEMO_STORE.serial_number || "",
+          accreditation_no: DEMO_STORE.accreditation_no || "",
+          accreditation_valid_until: DEMO_STORE.accreditation_valid_until || "",
+        });
+        setLoading(false);
+        setIsGuest(true);
+        return;
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("*, stores(*)").eq("id", user.id).single();
       
       if (profile) {
         setRole(profile.role);
@@ -191,7 +216,7 @@ export default function SettingsPage() {
     return <div className="p-8 text-surface-400">Loading settings...</div>;
   }
 
-  const canEdit = role === 'admin' || role === 'owner';
+  const canEdit = !isGuest && (role === 'admin' || role === 'owner');
 
   return (
     <div className="p-6 md:p-8 max-w-4xl mx-auto space-y-6">
@@ -207,7 +232,14 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {role === 'cashier' && (
+      {isGuest && (
+        <div className="p-4 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-3">
+           <AlertCircle className="w-5 h-5 flex-shrink-0" />
+           <p className="text-sm">You are in <strong>Demo Mode</strong>. These are sample store settings — changes cannot be saved. <a href="/login" className="underline font-semibold hover:text-emerald-300">Sign up</a> to create your own store.</p>
+        </div>
+      )}
+
+      {!isGuest && role === 'cashier' && (
         <div className="p-4 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-3">
            <AlertCircle className="w-5 h-5 flex-shrink-0" />
            <p className="text-sm">You are logged in as a <strong>Cashier</strong>. You can view these settings but cannot change them.</p>

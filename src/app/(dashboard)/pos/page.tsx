@@ -81,8 +81,29 @@ export default function CashierPage() {
   }, []);
 
   async function fetchProducts() {
-    const { data: user } = await supabase.auth.getUser();
-    const { data: profile } = await supabase.from("profiles").select("*, stores(*)").eq("id", user.user?.id).single();
+    let isGuestUser = true;
+    let userId = null;
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        isGuestUser = false;
+        userId = user.id;
+      }
+    } catch (e) {
+      console.error("POS Auth Error:", e);
+    }
+
+    if (isGuestUser) {
+      const { DEMO_PRODUCTS, DEMO_STORE, DEMO_PROFILE } = await import("@/lib/constants/demo-data");
+      setStoreInfo(DEMO_STORE);
+      setCashierName(DEMO_PROFILE.full_name);
+      setProducts(DEMO_PRODUCTS);
+      setLoading(false);
+      return;
+    }
+
+    const { data: profile } = await supabase.from("profiles").select("*, stores(*)").eq("id", userId).single();
     if (!profile) return;
 
     setStoreInfo(profile.stores);
@@ -142,8 +163,58 @@ export default function CashierPage() {
 
     try {
       // 1. Get user profile and store
-      const { data: user } = await supabase.auth.getUser();
-      const { data: profile } = await supabase.from("profiles").select("store_id, full_name").eq("id", user.user?.id).single();
+      let isGuestUser = true;
+      let userId = null;
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          isGuestUser = false;
+          userId = user.id;
+        }
+      } catch (e) {
+        console.error("Checkout Auth Error:", e);
+      }
+
+      if (isGuestUser) {
+        // Mock success for guest
+        const { DEMO_PROFILE } = await import("@/lib/constants/demo-data");
+        const receiptNo = 1000 + Math.floor(Math.random() * 9000);
+        
+        const printData = {
+          receipt_number: receiptNo,
+          cashier_name: DEMO_PROFILE.full_name,
+          items: cart.items.map(i => ({...i, line_total: i.line_total})),
+          subtotal: cart.subtotal,
+          discount_amount: cart.discountAmount,
+          discount_type: cart.discountType,
+          discount_id_number: cart.discountIdNumber,
+          discount_name: cart.discountName,
+          vatable_sales: cart.vatableSales,
+          vat_amount: cart.vatAmount,
+          vat_exempt_sales: cart.vatExemptSales,
+          zero_rated_sales: 0,
+          total_amount: cart.totalAmount,
+          cash_received: paymentMethod === 'cash' ? amountPaid : cart.totalAmount,
+          change_amount: paymentMethod === 'cash' ? (amountPaid - cart.totalAmount) : 0,
+          created_at: new Date().toISOString(),
+        };
+
+        setLatestTransaction(printData);
+        cart.clearCart();
+        setShowPaymentModal(false);
+        setPaymentAmount("");
+        setPaymentRef("");
+        setPaymentMethod("cash");
+        
+        // Print immediately after a slight delay
+        setTimeout(() => {
+          window.print();
+        }, 300);
+        return;
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("store_id, full_name").eq("id", userId).single();
       
       if (!profile) throw new Error("Profile not found");
 
@@ -154,7 +225,7 @@ export default function CashierPage() {
       // 3. Create Transaction
       const { data: tx, error: txError } = await supabase.from("transactions").insert({
         store_id: profile.store_id,
-        cashier_id: user.user?.id,
+        cashier_id: userId,
         receipt_number: receiptNo,
         subtotal: cart.subtotal,
         discount_amount: cart.discountAmount,

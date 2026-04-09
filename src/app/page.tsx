@@ -80,6 +80,12 @@ function Navbar() {
         {/* CTA */}
         <div className="hidden md:flex items-center gap-3">
           <a
+            href="/api/auth/demo"
+            className="text-sm font-medium text-emerald-400 hover:text-emerald-300 transition-colors px-4 py-2 border border-emerald-500/30 rounded-full hover:border-emerald-400/50 hover:bg-emerald-500/5"
+          >
+            ✨ Try Demo
+          </a>
+          <a
             href="/login"
             className="text-sm text-surface-300 hover:text-white transition-colors px-4 py-2"
           >
@@ -124,6 +130,12 @@ function Navbar() {
                 </a>
               ))}
               <hr className="border-surface-700" />
+              <a
+                href="/api/auth/demo"
+                className="text-center font-semibold text-emerald-400 border border-emerald-500/30 py-2.5 rounded-full"
+              >
+                ✨ Try Demo
+              </a>
               <a
                 href="/login"
                 className="text-center font-semibold text-white gradient-primary py-2.5 rounded-full"
@@ -209,10 +221,10 @@ function Hero() {
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </a>
             <a
-              href="#features"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 glass-light text-white font-semibold px-8 py-4 rounded-full text-lg hover:bg-white/10 transition-all"
+              href="/api/auth/demo"
+              className="group w-full sm:w-auto inline-flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 font-semibold px-8 py-4 rounded-full text-lg hover:bg-emerald-500/10 hover:border-emerald-400/60 transition-all"
             >
-              See Features
+              ✨ Explore Live Demo
             </a>
           </motion.div>
 
@@ -889,6 +901,12 @@ function CTA() {
           >
             Get Started Free
             <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+          </a>
+          <a
+            href="/api/auth/demo"
+            className="inline-flex items-center gap-2 border border-white/20 text-white font-semibold px-8 py-4 rounded-full text-lg hover:bg-white/5 transition-all"
+          >
+            ✨ Try Demo First
           </a>
         </motion.div>
         <p className="mt-4 text-sm text-surface-500">
