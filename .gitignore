@@ -50,3 +50,8 @@ VPS_DEPLOYMENT.md
 build.tar.gz
 deploy.zip
 dist/
+
+# infrastructure and deployment (private)
+deploy-patch.ps1
+remote-server.js
+ecosystem.config.js

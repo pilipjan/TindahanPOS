@@ -8,7 +8,10 @@ TindahanPOS is a modern, cloud-native Point of Sale system tailored specifically
 
 ## 🚀 Live Demo
 Experience the production environment here:  
-👉 **[https://tindahan-pos.philipjohnn8nautomation.online](https://tindahan-pos.philipjohnn8nautomation.online)**
+👉 **[tindahan-pos.philipjohnn8nautomation.online](https://tindahan-pos.philipjohnn8nautomation.online)**
+
+> [!TIP]
+> **No sign-up required!** Click the **"✨ Try Demo"** button on the landing page to instantly explore the dashboard with sample store data.
 
 ## 📸 Visual Preview
 
@@ -28,6 +31,11 @@ Experience the production environment here:
 ---
 
 ## ✨ Core Features
+
+### ⚡ Instant Demo Mode
+*   **Zero-friction onboarding**: Explore the full POS dashboard without creating an account.
+*   **Pre-populated Data**: Experience the system with realistic sample products, sales history, and store settings.
+*   **Guest Access**: Seamless redirect logic that handles temporary sessions securely.
 
 ### 🛒 Smart Checkout & Terminal
 *   **Intuitive Cashier UI**: Built for speed and high-volume transactions.
